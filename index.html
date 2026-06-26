@@ -28,11 +28,12 @@ button{font-family:inherit;cursor:pointer;border:none;background:none;color:inhe
 input,select{font-family:inherit}
 
 header{position:sticky;top:0;z-index:20;background:rgba(14,17,22,.92);
-  backdrop-filter:blur(12px);padding:calc(10px + var(--safe-t)) 16px 8px;border-bottom:1px solid var(--line)}
+  backdrop-filter:blur(12px);padding:calc(14px + var(--safe-t)) 16px 8px;border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:9px;margin-bottom:12px}
 .brand b{font-size:18px;font-weight:700;letter-spacing:-.2px}
-.brand .gear{margin-left:auto;color:var(--muted);width:24px;height:24px;display:flex;align-items:center;justify-content:center}
-.brand .gear:active{color:var(--accent)}
+.brand .gear{margin-left:auto;color:var(--text);width:40px;height:40px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex:none}
+.brand .gear svg{width:21px;height:21px}
+.brand .gear:active{background:var(--accent);color:#1a1300}
 .brand small{color:var(--muted);font-size:12px;font-weight:500;letter-spacing:.3px;text-transform:uppercase}
 .mark{width:22px;height:14px;flex:none}
 .days{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
@@ -323,7 +324,9 @@ function persistDraft(){save(K.draft,draft)}
 
 /* ---------- days ---------- */
 function renderDays(){
-  document.getElementById("days").innerHTML=Object.keys(plan).map(d=>
+  const ks=Object.keys(plan),el=document.getElementById("days");
+  el.style.gridTemplateColumns=`repeat(${Math.min(ks.length||1,4)},1fr)`;
+  el.innerHTML=ks.map(d=>
     `<button class="day ${d===curDay?'sel':''}" data-d="${d}">
        <div class="l">${d}</div><div class="s">${plan[d].sub||''}</div></button>`).join("");
 }
@@ -619,13 +622,13 @@ function renderHist(){
       ${s.cardio?`<div class="cardiotag">${s.cardio.type} · ${fmt(s.cardio.dur)}min${s.cardio.dist?` · ${fmt(s.cardio.dist)}km`:''}${s.cardio.hr?` · ${fmt(s.cardio.hr)}bpm`:''}</div>`:''}
       <div class="del" data-del="${s.id}">Excluir este treino</div></div></div>`;
   });
-  html+=`<div class="tools"><button id="copyCsv">Copiar treinos (CSV)</button><button id="dlCsv">Baixar CSV</button></div>`;
+  html+=`<div class="tools"><button id="xlsxBtn">Exportar Excel (.xlsx)</button><button id="copyCsv">Copiar CSV</button></div>`;
   root.innerHTML=html;
   root.querySelectorAll(".sess-h").forEach(h=>h.addEventListener("click",()=>h.parentElement.classList.toggle("open")));
   root.querySelectorAll("[data-del]").forEach(d=>d.addEventListener("click",ev=>{ev.stopPropagation();
     if(confirm("Excluir este treino do histórico?")){sessions=sessions.filter(x=>x.id!=d.dataset.del);save(K.sess,sessions);renderHist()}}));
+  document.getElementById("xlsxBtn").addEventListener("click",exportXlsx);
   document.getElementById("copyCsv").addEventListener("click",()=>copyText(buildTrainCSV(),"CSV"));
-  document.getElementById("dlCsv").addEventListener("click",()=>downloadCSV(buildTrainCSV(),`treinos_${todayISO()}.csv`));
 }
 function csvRow(arr){return arr.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")}
 function buildTrainCSV(){
@@ -648,6 +651,63 @@ function downloadCSV(txt,name){const blob=new Blob([txt],{type:"text/csv"});cons
   const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);toast("Se não baixar, use Copiar")}
 
+/* ---------- XLSX export (dependency-free, offline) ---------- */
+const _CRC=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c>>>0}return t})();
+function crc32(u8){let c=0xFFFFFFFF;for(let i=0;i<u8.length;i++)c=_CRC[(c^u8[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0}
+function _enc(s){return new TextEncoder().encode(s)}
+function _zip(files){const u16=n=>[n&255,(n>>8)&255],u32=n=>[n&255,(n>>8)&255,(n>>16)&255,(n>>24)&255];
+  const parts=[],central=[];let offset=0;
+  files.forEach(f=>{const data=f.data,crc=crc32(data),name=_enc(f.name);
+    const local=[].concat([0x50,0x4b,3,4],u16(20),u16(0),u16(0),u16(0),u16(0),u32(crc),u32(data.length),u32(data.length),u16(name.length),u16(0));
+    parts.push(Uint8Array.from(local),name,data);central.push({crc,len:data.length,name,offset});
+    offset+=local.length+name.length+data.length;});
+  const cdStart=offset;
+  central.forEach(c=>{const h=[].concat([0x50,0x4b,1,2],u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),u32(c.crc),u32(c.len),u32(c.len),u16(c.name.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(c.offset));
+    parts.push(Uint8Array.from(h),c.name);offset+=h.length+c.name.length;});
+  const end=Uint8Array.from([].concat([0x50,0x4b,5,6],u16(0),u16(0),u16(central.length),u16(central.length),u32(offset-cdStart),u32(cdStart),u16(0)));
+  parts.push(end);
+  let total=parts.reduce((a,b)=>a+b.length,0),out=new Uint8Array(total),p=0;
+  parts.forEach(b=>{out.set(b,p);p+=b.length});return out;}
+function _xesc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function _colRef(i){let s="";i++;while(i){const m=(i-1)%26;s=String.fromCharCode(65+m)+s;i=(i-(m+1))/26}return s}
+function _sheetXml(rows){let x='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>';
+  rows.forEach((row,r)=>{x+=`<row r="${r+1}">`;row.forEach((v,ci)=>{const ref=_colRef(ci)+(r+1);
+    if(v===""||v==null)return;
+    if(typeof v==="number"&&isFinite(v))x+=`<c r="${ref}"><v>${v}</v></c>`;
+    else x+=`<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${_xesc(v)}</t></is></c>`});x+=`</row>`});
+  return x+'</sheetData></worksheet>';}
+function buildXlsx(sheets){const f=[];
+  f.push({name:"[Content_Types].xml",data:_enc('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+sheets.map((s,i)=>`<Override PartName="/xl/worksheets/sheet${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")+'</Types>')});
+  f.push({name:"_rels/.rels",data:_enc('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')});
+  f.push({name:"xl/workbook.xml",data:_enc('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'+sheets.map((s,i)=>`<sheet name="${_xesc(String(s.name).replace(/[\\/?*\[\]:]/g,"").slice(0,31))}" sheetId="${i+1}" r:id="rId${i+1}"/>`).join("")+'</sheets></workbook>')});
+  f.push({name:"xl/_rels/workbook.xml.rels",data:_enc('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+sheets.map((s,i)=>`<Relationship Id="rId${i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i+1}.xml"/>`).join("")+'</Relationships>')});
+  sheets.forEach((s,i)=>f.push({name:`xl/worksheets/sheet${i+1}.xml`,data:_enc(_sheetXml(s.rows))}));
+  return _zip(f);}
+function exportSheets(){
+  const treinos=[["Data","Dia","Item","Série","Carga (kg)","Reps","RIR","Cardio min","Cardio km","Cardio bpm"]];
+  sessions.forEach(s=>{(s.e||[]).forEach(en=>en.sets.forEach((st,i)=>
+    treinos.push([s.date,s.day,en.n,i+1,st.c,st.r,st.rir!=null?st.rir:"","","",""])));
+    if(s.cardio)treinos.push([s.date,s.day,"Cardio: "+s.cardio.type,"","","","",s.cardio.dur,s.cardio.dist||"",s.cardio.hr||""]);});
+  const resumo=[["Data","Dia","Exercícios","Séries","Volume (kg)","Cardio"]];
+  sessions.forEach(s=>{const l=(s.e||[]),nset=l.reduce((a,en)=>a+en.sets.length,0),
+    vol=l.reduce((a,en)=>a+en.sets.reduce((b,st)=>b+st.c*st.r,0),0);
+    resumo.push([s.date,s.day,l.length,nset,vol,s.cardio?`${s.cardio.type} ${fmt(s.cardio.dur)}min`:""])});
+  const corpo=[["Data","Peso (kg)",...measFields]];
+  body.slice().sort((a,b)=>a.date.localeCompare(b.date)).forEach(b=>
+    corpo.push([b.date,b.weight||"",...measFields.map(m=>(b.measures&&b.measures[m])||"")]));
+  return buildXlsx([{name:"Treinos",rows:treinos},{name:"Sessões",rows:resumo},{name:"Corpo",rows:corpo}]);
+}
+async function exportXlsx(){
+  let bytes;try{bytes=exportSheets()}catch(e){toast("Erro ao gerar");return}
+  const fname=`treino_${todayISO()}.xlsx`;
+  const blob=new Blob([bytes],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  try{const file=new File([blob],fname,{type:blob.type});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:fname});return}}
+  catch(e){if(e&&e.name==="AbortError")return}
+  const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=fname;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);toast("Excel exportado");
+}
+
 /* ---------- CONFIG ---------- */
 function openConfig(){cfgDay=curDay;renderConfig();document.getElementById("config").classList.add("show")}
 function closeConfig(){document.getElementById("config").classList.remove("show");
@@ -656,6 +716,11 @@ function renderConfig(){
   const c=document.getElementById("config");
   const days=Object.keys(plan);
   let html=`<div class="cfg-head"><button class="cfg-back" id="cfgBack">‹</button><b>Configurar</b><button class="done" id="cfgDone">Concluir</button></div><div class="cfg-body">`;
+  // training days (structure)
+  html+=`<div class="cfg-sec"><h4>Dias de treino</h4>
+    <div class="taglist" id="dayList">${days.map(d=>`<span class="tag">Treino ${d}${days.length>1?`<button data-daydel="${d}">×</button>`:''}</span>`).join("")}</div>
+    <div class="scrsub" style="margin:8px 2px 0">Remover um dia tira os exercícios dele do app; o histórico já registrado continua intacto.</div>
+    <button class="addbtn" id="addDay" style="margin-top:10px">+ Adicionar dia</button></div>`;
   // exercises
   html+=`<div class="cfg-sec"><h4>Exercícios do treino</h4>
     <div class="daypick">${days.map(d=>`<button data-cd="${d}" class="${d===cfgDay?'on':''}">${d}</button>`).join("")}</div>`;
@@ -680,7 +745,9 @@ function renderConfig(){
     ${cardioTypes.map(t=>`<span class="tag">${t}<button data-cdel="${t}">×</button></span>`).join("")||'<span style="color:var(--muted);font-size:13px">Nenhum</span>'}</div>
     <div class="addrow"><input id="cardioAdd" placeholder="Ex.: Pular corda"><button id="cardioAddBtn">Add</button></div></div>`;
   // data
-  html+=`<div class="cfg-sec"><h4>Dados</h4><div class="tools" style="margin-bottom:8px">
+  html+=`<div class="cfg-sec"><h4>Dados</h4>
+    <button class="addbtn" id="expXlsx" style="border-style:solid;background:var(--accent);color:#1a1300;border-color:var(--accent);margin-bottom:8px">Exportar Excel (.xlsx)</button>
+    <div class="tools" style="margin-bottom:8px">
     <button id="expTrain">Copiar treinos</button><button id="expBody">Copiar corpo</button></div>
     <button class="resetbtn" id="resetAll">Apagar todos os dados</button></div></div>`;
   c.innerHTML=html;
@@ -691,6 +758,21 @@ function wireConfig(){
   const c=document.getElementById("config");
   c.querySelector("#cfgBack").onclick=closeConfig;
   c.querySelector("#cfgDone").onclick=closeConfig;
+  // training-day management
+  c.querySelectorAll("[data-daydel]").forEach(b=>b.onclick=()=>{
+    const d=b.dataset.daydel;
+    if(confirm(`Remover o Treino ${d}? Os exercícios dele saem do app (o histórico fica).`)){
+      delete plan[d];persistPlan();
+      const ks=Object.keys(plan);
+      if(cfgDay===d)cfgDay=ks[0];if(curDay===d)curDay=ks[0];
+      renderConfig();renderDays();
+    }});
+  c.querySelector("#addDay").onclick=()=>{
+    const used=Object.keys(plan);let letter=null;
+    for(let i=0;i<26;i++){const L=String.fromCharCode(65+i);if(!used.includes(L)){letter=L;break}}
+    if(!letter){toast("Limite de dias atingido");return}
+    plan[letter]={title:"Treino "+letter,sub:"",ex:[]};persistPlan();cfgDay=letter;renderConfig();renderDays();
+  };
   c.querySelectorAll("[data-cd]").forEach(b=>b.onclick=()=>{commitTitle();cfgDay=b.dataset.cd;renderConfig()});
   c.querySelector("#cfgTitle").addEventListener("change",commitTitle);
   function commitTitle(){const t=c.querySelector("#cfgTitle");if(t){plan[cfgDay].title=t.value.trim()||("Treino "+cfgDay);persistPlan()}}
@@ -726,6 +808,7 @@ function wireConfig(){
   c.querySelector("#cardioAddBtn").onclick=()=>{const v=c.querySelector("#cardioAdd").value.trim();
     if(v&&!cardioTypes.includes(v)){cardioTypes.push(v);save(K.cardio,cardioTypes);renderConfig()}};
   // data
+  c.querySelector("#expXlsx").onclick=exportXlsx;
   c.querySelector("#expTrain").onclick=()=>copyText(buildTrainCSV(),"Treinos");
   c.querySelector("#expBody").onclick=()=>copyText(buildBodyCSV(),"Corpo");
   c.querySelector("#resetAll").onclick=()=>{if(confirm("Apagar TODOS os dados (treinos, corpo, configurações)? Não dá pra desfazer.")){
