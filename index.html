@@ -53,6 +53,10 @@ main{padding:16px}
 
 .ex{background:var(--panel);border:1px solid var(--line);border-radius:16px;margin-bottom:12px;overflow:hidden}
 .ex-top{display:flex;align-items:baseline;gap:8px;padding:14px 15px 10px}
+.exprog{font-size:12px;font-weight:800;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.3px}
+.exprog.ok{color:var(--accent);font-size:14px}
+.ex.done{opacity:.48;transition:opacity .2s}
+.ex.done .ex-name{color:var(--muted)}
 .ex-name{font-size:16px;font-weight:650;letter-spacing:-.2px;flex:1;line-height:1.25}
 .ex-target{font-size:12px;color:var(--accent);font-weight:600;white-space:nowrap}
 .ex-target .x{color:var(--muted);font-weight:500;margin:0 1px}
@@ -338,7 +342,8 @@ function renderTrain(){
   let html=`<div class="dayhead"><b>Treino ${curDay}</b> · ${p.title} &nbsp;·&nbsp; ${ptDate(draft.date)}</div>`;
   p.ex.forEach((x,ei)=>{
     const pr=prFor(x.n);
-    html+=`<div class="ex"><div class="ex-top"><div class="ex-name">${x.n}</div>
+    html+=`<div class="ex" data-ex="${ei}"><div class="ex-top"><div class="ex-name">${x.n}</div>
+      <span class="exprog" data-planned="${x.s}"></span>
       <div class="ex-target">${x.s}<span class="x">×</span>${x.r}</div></div>
       <div class="setlbls"><span>#</span><span>Carga (kg)</span><span>Reps</span><span>RIR</span></div>`;
     for(let si=0;si<x.s;si++){
@@ -369,7 +374,18 @@ function renderTrain(){
     </div></div>`;
   html+=`<div style="height:96px"></div>`;
   document.getElementById("view-train").innerHTML=html;
-  updateSaveBtn(); recolor();
+  updateSaveBtn(); recolor(); updateProgress();
+}
+function updateProgress(){
+  document.querySelectorAll('#view-train .ex[data-ex]').forEach(card=>{
+    const ei=+card.dataset.ex, sets=draft.e[ei]?draft.e[ei].sets:[];
+    const planned=(plan[curDay].ex[ei]||{}).s||0;
+    const done=sets.filter(s=>num(s.c)>0&&num(s.r)>0).length;
+    const complete=planned>0&&done>=planned;
+    card.classList.toggle('done',complete);
+    const p=card.querySelector('.exprog');
+    if(p){p.textContent=complete?'✓':`${done}/${planned}`;p.classList.toggle('ok',complete);}
+  });
 }
 function recolor(){
   document.querySelectorAll('#view-train .set').forEach(row=>{
@@ -390,7 +406,7 @@ document.getElementById("view-train").addEventListener("input",ev=>{
     draft.cardio[{cdur:"dur",cdist:"dist",chr:"hr"}[inp.id]]=inp.value.replace(",",".");persistDraft();updateSaveBtn();return;}
   const row=ev.target.closest(".set");if(!row)return;
   const f=ev.target.closest(".field").dataset.f,ei=+row.dataset.ei,si=+row.dataset.si;
-  draft.e[ei].sets[si][f]=inp.value.replace(",",".");persistDraft();recolor();updateSaveBtn();
+  draft.e[ei].sets[si][f]=inp.value.replace(",",".");persistDraft();recolor();updateSaveBtn();updateProgress();
 });
 document.getElementById("view-train").addEventListener("click",ev=>{
   const ct=ev.target.closest("[data-ct]");
@@ -405,7 +421,7 @@ document.getElementById("view-train").addEventListener("click",ev=>{
   if(field==="c"){let v=num(st.c);v=Math.max(0,v+dir*2.5);st.c=String(fmt(v));}
   else{let v=parseInt(st.r)||0;v=Math.max(0,v+dir);st.r=String(v);}
   persistDraft();row.querySelector(`[data-f="${field}"] input`).value=field==="c"?st.c:st.r;
-  recolor();updateSaveBtn();
+  recolor();updateSaveBtn();updateProgress();
 });
 document.getElementById("saveBtn").addEventListener("click",()=>{
   const entries=draft.e.map(en=>({n:en.n,sets:en.sets.filter(s=>num(s.c)>0&&num(s.r)>0)
